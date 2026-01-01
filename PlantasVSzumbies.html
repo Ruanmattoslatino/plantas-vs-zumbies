@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jardim vs Zumbis: Survival Edition</title>
+    <style>
+        :root {
+            --bg-color: #222;
+            --hud-color: #3e2723;
+            --sun-color: #fbc02d;
+        }
+
+        body {
+            margin: 0;
+            background-color: var(--bg-color);
+            color: white;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        #game-ui {
+            width: 900px;
+            background: var(--hud-color);
+            padding: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border: 4px solid #5d4037;
+            border-bottom: none;
+            border-radius: 10px 10px 0 0;
+            margin-top: 10px;
+        }
+
+        .stats {
+            display: flex;
+            gap: 20px;
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        .sun-display {
+            background: var(--sun-color);
+            color: #3e2723;
+            padding: 5px 15px;
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border: 2px solid #f9a825;
+        }
+
+        #store {
+            display: flex;
+            gap: 12px;
+        }
+
+        .card {
+            width: 80px;
+            height: 90px;
+            background: #8d6e63;
+            border: 3px solid #d7ccc8;
+            border-radius: 8px;
+            cursor: grab;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: space-between;
+            padding: 5px;
+            font-size: 12px;
+            font-weight: bold;
+            text-align: center;
+        }
+
+        .card:hover { background: #a1887f; }
+        .card:active { cursor: grabbing; }
+
+        .card .cost {
+            background: rgba(0,0,0,0.5);
+            width: 100%;
+            border-radius: 4px;
+            color: var(--sun-color);
+        }
+
+        canvas {
+            background: #2e7d32;
+            border: 4px solid #5d4037;
+            border-radius: 0 0 10px 10px;
+            display: block;
+        }
+
+        #msg {
+            position: absolute;
+            top: 50%;
+            pointer-events: none;
+            font-size: 48px;
+            text-shadow: 2px 2px 10px black;
+            font-weight: 900;
+            text-align: center;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-ui">
+        <div class="stats">
+            <div class="sun-display">☀️ <span id="sun-count">100</span></div>
+            <div id="level-display">Fase: 1</div>
+        </div>
+        
+        <div id="store">
+            <div class="card" draggable="true" ondragstart="handleDrag(event, 'sunflower')" data-cost="50">
+                <span>🌻</span>
+                Girassol
+                <div class="cost">50</div>
+            </div>
+            <div class="card" draggable="true" ondragstart="handleDrag(event, 'peashooter')" data-cost="100">
+                <span>🌱</span>
+                Ervilha
+                <div class="cost">100</div>
+            </div>
+            <div class="card" draggable="true" ondragstart="handleDrag(event, 'wallnut')" data-cost="50">
+                <span>🥔</span>
+                Noz
+                <div class="cost">50</div>
+            </div>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+    <div id="msg">ZUMBIS ESTÃO CHEGANDO!</div>
+
+<script>
+/** * CONFIGURAÇÕES GERAIS E ESTADO
+ */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+canvas.width = 900;
+canvas.height = 500;
+
+const cellSize = 100;
+let sunAmount = 150;
+let level = 1;
+let frame = 0;
+let gameOver = false;
+let draggedType = null;
+
+const plants = [];
+const zombies = [];
+const suns = [];
+const projectiles = [];
+
+// Balanceamento: Zumbis mais devagar e menos frequentes
+let zombieSpawnRate = 600; 
+let zombieSpeedBase = 0.2;
+
+/**
+ * CLASSES DO JOGO
+ */
+
+class Sun {
+    constructor(x, y, isFromSky = true) {
+        this.x = x;
+        this.y = y;
+        this.radius = 25;
+        this.value = 25;
+        this.timer = 0;
+        this.isFromSky = isFromSky;
+        this.destY = isFromSky ? Math.random() * (canvas.height - 100) + 50 : y;
+        this.speed = 1.2;
+        
+        if (!isFromSky) { // Salta do girassol
+            this.vx = (Math.random() - 0.5) * 4;
+            this.vy = -3;
+        }
+    }
+
+    update() {
+        if (this.isFromSky) {
+            if (this.y < this.destY) this.y += this.speed;
+        } else {
+            if (this.timer < 40) {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vy += 0.15;
+            }
+        }
+        this.timer++;
+    }
+
+    draw() {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = '#fbc02d';
+        ctx.fill();
+        ctx.strokeStyle = '#f57f17';
+        ctx.lineWidth = 3;
+        ctx.stroke();
+        // Brilho
+        ctx.fillStyle = 'white';
+        ctx.font = '20px Arial';
+        ctx.fillText('☀️', this.x - 12, this.y + 8);
+        ctx.restore();
+    }
+}
+
+class Projectile {
+    constructor(x, y) {
+        this.x = x;
+        this.y = y;
+        this.speed = 5;
+        this.damage = 20;
+    }
+    update() { this.x += this.speed; }
+    draw() {
+        ctx.fillStyle = '#76ff03';
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+    }
+}
+
+class Plant {
+    constructor(x, y, type) {
+        this.x = x;
+        this.y = y;
+        this.type = type;
+        this.health = 100;
+        this.timer = 0;
+        if (type === 'wallnut') this.health = 600;
+    }
+
+    draw() {
+        ctx.save();
+        ctx.font = '60px Arial';
+        ctx.textAlign = 'center';
+        let icon = '🌱';
+        if (this.type === 'sunflower') icon = '🌻';
+        if (this.type === 'wallnut') icon = '🥔';
+        ctx.fillText(icon, this.x + 50, this.y + 70);
+        
+        // Barra de vida
+        if (this.health < 100 || this.type === 'wallnut') {
+            ctx.fillStyle = 'red';
+            ctx.fillRect(this.x + 20, this.y + 10, 60, 5);
+            ctx.fillStyle = 'lime';
+            ctx.fillRect(this.x + 20, this.y + 10, (this.health / (this.type === 'wallnut' ? 600 : 100)) * 60, 5);
+        }
+        ctx.restore();
+    }
+
+    update() {
+        this.timer++;
+        if (this.type === 'sunflower' && this.timer % 600 === 0) {
+            suns.push(new Sun(this.x + 50, this.y + 50, false));
+        }
+        if (this.type === 'peashooter' && this.timer % 120 === 0) {
+            // Só atira se houver zumbi na linha
+            if (zombies.some(z => z.y === this.y && z.x > this.x)) {
+                projectiles.push(new Projectile(this.x + 80, this.y + 45));
+            }
+        }
+    }
+}
+
+class Zombie {
+    constructor(y) {
+        this.x = canvas.width;
+        this.y = y;
+        this.health = 100;
+        this.speed = zombieSpeedBase + (Math.random() * 0.1);
+        this.eating = false;
+    }
+
+    update() {
+        let collided = false;
+        plants.forEach((plant, index) => {
+            if (this.x < plant.x + 60 && this.x + 50 > plant.x && this.y === plant.y) {
+                collided = true;
+                plant.health -= 0.5;
+                if (plant.health <= 0) plants.splice(index, 1);
+            }
+        });
+
+        this.eating = collided;
+        if (!this.eating) this.x -= this.speed;
+        if (this.x < 0) gameOver = true;
+    }
+
+    draw() {
+        ctx.font = '60px Arial';
+        ctx.fillText('🧟', this.x, this.y + 70);
+        // Barra de vida zumbi
+        ctx.fillStyle = 'red';
+        ctx.fillRect(this.x, this.y + 10, 50, 5);
+        ctx.fillStyle = 'green';
+        ctx.fillRect(this.x, this.y + 10, (this.health/100) * 50, 5);
+    }
+}
+
+/**
+ * INTERAÇÃO E MECÂNICAS
+ */
+
+// Função de Drag and Drop
+function handleDrag(e, type) {
+    draggedType = type;
+}
+
+canvas.addEventListener('dragover', (e) => e.preventDefault());
+
+canvas.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    const gridX = Math.floor(mouseX / cellSize) * cellSize;
+    const gridY = Math.floor(mouseY / cellSize) * cellSize;
+
+    const costs = { sunflower: 50, peashooter: 100, wallnut: 50 };
+    const cost = costs[draggedType];
+
+    const isOccupied = plants.some(p => p.x === gridX && p.y === gridY);
+
+    if (!isOccupied && sunAmount >= cost) {
+        plants.push(new Plant(gridX, gridY, draggedType));
+        sunAmount -= cost;
+        document.getElementById('sun-count').innerText = sunAmount;
+    }
+});
+
+// Coleta de Sol corrigida
+canvas.addEventListener('mousedown', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    for (let i = suns.length - 1; i >= 0; i--) {
+        const sun = suns[i];
+        const dist = Math.hypot(sun.x - mouseX, sun.y - mouseY);
+        if (dist < sun.radius + 10) {
+            sunAmount += sun.value;
+            suns.splice(i, 1);
+            document.getElementById('sun-count').innerText = sunAmount;
+            return;
+        }
+    }
+});
+
+/**
+ * LOOP PRINCIPAL
+ */
+
+function update() {
+    if (gameOver) return;
+
+    frame++;
+
+    // Spawn de Sóis do céu
+    if (frame % 300 === 0) {
+        suns.push(new Sun(Math.random() * (canvas.width - 50) + 25, -50, true));
+    }
+
+    // Spawn de Zumbis por fase
+    if (frame % zombieSpawnRate === 0) {
+        const row = Math.floor(Math.random() * 5) * cellSize;
+        zombies.push(new Zombie(row));
+    }
+
+    // Sistema de Fases simples
+    if (frame % 3000 === 0) {
+        level++;
+        document.getElementById('level-display').innerText = "Fase: " + level;
+        zombieSpawnRate = Math.max(200, zombieSpawnRate - 50);
+        zombieSpeedBase += 0.05;
+        showMsg("FASE " + level);
+    }
+
+    plants.forEach(p => p.update());
+    zombies.forEach(z => z.update());
+    suns.forEach(s => s.update());
+    projectiles.forEach((p, index) => {
+        p.update();
+        if (p.x > canvas.width) projectiles.splice(index, 1);
+    });
+
+    // Colisão Projétil vs Zumbi
+    projectiles.forEach((p, pi) => {
+        zombies.forEach((z, zi) => {
+            if (p.x > z.x && p.x < z.x + 50 && p.y > z.y && p.y < z.y + cellSize) {
+                z.health -= p.damage;
+                projectiles.splice(pi, 1);
+                if (z.health <= 0) zombies.splice(zi, 1);
+            }
+        });
+    });
+}
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Grade do Jardim
+    for (let y = 0; y < canvas.height; y += cellSize) {
+        for (let x = 0; x < canvas.width; x += cellSize) {
+            ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+            ctx.strokeRect(x, y, cellSize, cellSize);
+        }
+    }
+
+    plants.forEach(p => p.draw());
+    zombies.forEach(z => z.draw());
+    projectiles.forEach(p => p.draw());
+    suns.forEach(s => s.draw());
+
+    if (gameOver) {
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(0,0, canvas.width, canvas.height);
+        ctx.fillStyle = 'white';
+        ctx.font = '60px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText("FIM DE JOGO!", canvas.width/2, canvas.height/2);
+        ctx.font = '24px Arial';
+        ctx.fillText("Zumbis invadiram sua casa.", canvas.width/2, canvas.height/2 + 50);
+    }
+}
+
+function showMsg(text) {
+    const el = document.getElementById('msg');
+    el.innerText = text;
+    el.style.display = 'block';
+    setTimeout(() => el.style.display = 'none', 2000);
+}
+
+function loop() {
+    update();
+    draw();
+    requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
